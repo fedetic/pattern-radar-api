@@ -106,7 +106,8 @@ async def get_pairs():
 async def get_market_data(
     coin_id: str,
     vs_currency: str = "usd",
-    days: int = Query(30, ge=1, le=365, description="Number of days of data")
+    days: int = Query(30, ge=1, le=365, description="Number of days of data"),
+    timeframe: Optional[str] = Query("1d", description="Data timeframe")
 ):
     """Get OHLCV market data for a specific coin"""
     try:
@@ -116,7 +117,7 @@ async def get_market_data(
             if actual_coin_id:
                 coin_id = actual_coin_id
         
-        df = coingecko_client.get_ohlc_data(coin_id, vs_currency, days)
+        df = coingecko_client.get_ohlc_data(coin_id, vs_currency, days, timeframe)
         
         if df is None or df.empty:
             raise HTTPException(status_code=404, detail=f"No market data found for {coin_id}")
@@ -136,6 +137,7 @@ async def get_market_data(
             "coin_id": coin_id,
             "vs_currency": vs_currency,
             "days": days,
+            "timeframe": timeframe,
             "data": market_data
         }
         
@@ -188,8 +190,8 @@ async def get_patterns(
         
         print(f"Using coin_id: {coin_id}")
         
-        # Fetch market data
-        df = coingecko_client.get_ohlc_data(coin_id, vs_currency, days)
+        # Fetch market data with timeframe support
+        df = coingecko_client.get_ohlc_data(coin_id, vs_currency, days, timeframe)
         
         if df is None or df.empty:
             print(f"No market data found for {coin_id}")
@@ -232,11 +234,19 @@ async def get_patterns(
                 }
             }
         
+        # Get additional market data
+        try:
+            markets_data = coingecko_client.get_coins_markets(vs_currency="usd", limit=100)
+            coin_market_data = next((coin for coin in markets_data if coin['coin_id'] == coin_id), None)
+        except:
+            coin_market_data = None
+        
         return {
             "coin_id": coin_id,
             "vs_currency": vs_currency,
             "timeframe": timeframe,
             "analysis_date": df.index[-1].isoformat(),
+            "market_info": coin_market_data,
             **analysis_result
         }
         

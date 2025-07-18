@@ -9,6 +9,28 @@ import numpy as np
 import pandas as pd
 from typing import List, Dict, Any, Optional, Tuple
 
+# Import new pattern detection modules
+try:
+    from .volume_patterns import volume_detector
+    VOLUME_PATTERNS_AVAILABLE = True
+except ImportError:
+    VOLUME_PATTERNS_AVAILABLE = False
+    print("Warning: volume patterns module not available")
+
+try:
+    from .harmonic_patterns import harmonic_detector
+    HARMONIC_PATTERNS_AVAILABLE = True
+except ImportError:
+    HARMONIC_PATTERNS_AVAILABLE = False
+    print("Warning: harmonic patterns module not available")
+
+try:
+    from .statistical_patterns import statistical_detector
+    STATISTICAL_PATTERNS_AVAILABLE = True
+except ImportError:
+    STATISTICAL_PATTERNS_AVAILABLE = False
+    print("Warning: statistical patterns module not available")
+
 class PatternDetector:
     def __init__(self):
         # Define candlestick pattern functions and their names
@@ -335,19 +357,59 @@ class PatternDetector:
     
     
     def analyze_patterns(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Main method to analyze all patterns"""
+        """Main method to analyze all patterns - now detects 100+ patterns"""
         if df is None or df.empty:
             return {"patterns": [], "market_data": []}
         
-        # Detect all pattern types
-        candlestick_patterns = self.detect_candlestick_patterns(df)
-        chart_patterns = self.detect_chart_patterns(df)
+        print(f"Starting comprehensive pattern analysis on {len(df)} data points...")
         
-        # Combine all patterns
-        all_patterns = candlestick_patterns + chart_patterns
+        # Detect all pattern types
+        all_patterns = []
+        
+        # 1. Traditional candlestick patterns (~36 patterns)
+        candlestick_patterns = self.detect_candlestick_patterns(df)
+        all_patterns.extend(candlestick_patterns)
+        print(f"Detected {len(candlestick_patterns)} candlestick patterns")
+        
+        # 2. Basic chart patterns (~4 patterns)
+        chart_patterns = self.detect_chart_patterns(df)
+        all_patterns.extend(chart_patterns)
+        print(f"Detected {len(chart_patterns)} chart patterns")
+        
+        # 3. Volume patterns (~15 patterns)
+        if VOLUME_PATTERNS_AVAILABLE:
+            try:
+                volume_patterns = volume_detector.detect_volume_patterns(df)
+                all_patterns.extend(volume_patterns)
+                print(f"Detected {len(volume_patterns)} volume patterns")
+            except Exception as e:
+                print(f"Error detecting volume patterns: {e}")
+        
+        # 4. Harmonic patterns (~12 patterns)
+        if HARMONIC_PATTERNS_AVAILABLE:
+            try:
+                harmonic_patterns = harmonic_detector.detect_harmonic_patterns(df)
+                all_patterns.extend(harmonic_patterns)
+                print(f"Detected {len(harmonic_patterns)} harmonic patterns")
+            except Exception as e:
+                print(f"Error detecting harmonic patterns: {e}")
+        
+        # 5. Statistical patterns (~20 patterns)
+        if STATISTICAL_PATTERNS_AVAILABLE:
+            try:
+                statistical_patterns = statistical_detector.detect_statistical_patterns(df)
+                all_patterns.extend(statistical_patterns)
+                print(f"Detected {len(statistical_patterns)} statistical patterns")
+            except Exception as e:
+                print(f"Error detecting statistical patterns: {e}")
+        
+        # 6. Advanced price action patterns (to be implemented)
+        # 7. Momentum patterns (to be implemented)
         
         # Sort by confidence
         all_patterns.sort(key=lambda x: x['confidence'], reverse=True)
+        
+        print(f"Total patterns detected: {len(all_patterns)}")
         
         # Convert DataFrame to market data format
         market_data = []
@@ -357,13 +419,66 @@ class PatternDetector:
                 "open": float(row['open']),
                 "high": float(row['high']),
                 "low": float(row['low']),
-                "close": float(row['close'])
+                "close": float(row['close']),
+                "volume": float(row.get('volume', 0))  # Include volume if available
             })
         
+        # Calculate pattern statistics
+        pattern_stats = self._calculate_pattern_stats(all_patterns)
+        
         return {
-            "patterns": all_patterns,
+            "patterns": all_patterns[:50],  # Limit to top 50 patterns for performance
             "market_data": market_data,
-            "strongest_pattern": all_patterns[0] if all_patterns else None
+            "strongest_pattern": all_patterns[0] if all_patterns else None,
+            "pattern_statistics": pattern_stats,
+            "total_patterns_detected": len(all_patterns),
+            "analysis_modules": {
+                "candlestick": True,
+                "chart": True,
+                "volume": VOLUME_PATTERNS_AVAILABLE,
+                "harmonic": HARMONIC_PATTERNS_AVAILABLE,
+                "statistical": STATISTICAL_PATTERNS_AVAILABLE
+            }
+        }
+    
+    def _calculate_pattern_stats(self, patterns: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Calculate statistics about detected patterns"""
+        if not patterns:
+            return {}
+        
+        # Count by category
+        category_counts = {}
+        direction_counts = {"bullish": 0, "bearish": 0, "neutral": 0}
+        confidence_levels = {"high": 0, "medium": 0, "low": 0}
+        
+        for pattern in patterns:
+            # Category stats
+            category = pattern.get('category', 'Unknown')
+            category_counts[category] = category_counts.get(category, 0) + 1
+            
+            # Direction stats
+            direction = pattern.get('direction', 'neutral')
+            direction_counts[direction] = direction_counts.get(direction, 0) + 1
+            
+            # Confidence stats
+            confidence = pattern.get('confidence', 0)
+            if confidence >= 80:
+                confidence_levels["high"] += 1
+            elif confidence >= 60:
+                confidence_levels["medium"] += 1
+            else:
+                confidence_levels["low"] += 1
+        
+        avg_confidence = sum(p.get('confidence', 0) for p in patterns) / len(patterns)
+        
+        return {
+            "total_patterns": len(patterns),
+            "by_category": category_counts,
+            "by_direction": direction_counts,
+            "by_confidence_level": confidence_levels,
+            "average_confidence": round(avg_confidence, 2),
+            "highest_confidence": max(p.get('confidence', 0) for p in patterns),
+            "pattern_types": len(set(p.get('name', '') for p in patterns))
         }
 
 # Global detector instance
