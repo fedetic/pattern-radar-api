@@ -308,13 +308,17 @@ class HarmonicPatternDetector:
                 X, A, B, C, D = pivots[i:i+5]
                 direction = "bullish" if D['type'] == 'low' else "bearish"
                 
+                # Make each perfect pattern unique by including timestamp or sequence info
+                pattern_id = f"Perfect-{direction.capitalize()}-{i}"
+                pattern_name = f"Perfect {direction.capitalize()} Pattern"
+                
                 patterns.append({
-                    "name": "Perfect Pattern",
+                    "name": pattern_name,
                     "category": "Harmonic",
                     "confidence": 90,
                     "direction": direction,
                     "coordinates": self._get_harmonic_coordinates(df, [X, A, B, C, D], "perfect"),
-                    "description": f"{direction.capitalize()} Perfect pattern with ideal ratios"
+                    "description": f"{direction.capitalize()} Perfect pattern with ideal ratios at sequence {i+1}"
                 })
         
         return patterns
