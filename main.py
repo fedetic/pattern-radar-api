@@ -151,10 +151,11 @@ async def get_patterns(
     coin_id: str,
     vs_currency: str = "usd",
     days: int = Query(30, ge=7, le=365, description="Number of days for analysis"),
-    timeframe: Optional[str] = Query("1d", description="Analysis timeframe")
+    timeframe: Optional[str] = Query("1d", description="Analysis timeframe"),
+    full_history: bool = Query(False, description="Show all patterns, not just most recent window")
 ):
     """Analyze patterns for a specific coin and return pattern data with coordinates for visualization"""
-    return await _analyze_patterns_internal(coin_id, vs_currency, days, timeframe)
+    return await _analyze_patterns_internal(coin_id, vs_currency, days, timeframe, None, None, full_history)
 
 @app.get("/patterns/{coin_id}/filtered")
 async def get_filtered_patterns(
@@ -162,10 +163,11 @@ async def get_filtered_patterns(
     start_time: str = Query(..., description="Start time for analysis (ISO format)"),
     end_time: str = Query(..., description="End time for analysis (ISO format)"),
     vs_currency: str = "usd",
-    timeframe: Optional[str] = Query("1d", description="Analysis timeframe")
+    timeframe: Optional[str] = Query("1d", description="Analysis timeframe"),
+    full_history: bool = Query(False, description="Show all patterns, not just most recent window")
 ):
     """Analyze patterns for a specific coin within a time range (for zoom updates)"""
-    return await _analyze_patterns_internal(coin_id, vs_currency, None, timeframe, start_time, end_time)
+    return await _analyze_patterns_internal(coin_id, vs_currency, None, timeframe, start_time, end_time, full_history)
 
 async def _analyze_patterns_internal(
     coin_id: str, 
@@ -173,7 +175,8 @@ async def _analyze_patterns_internal(
     days: Optional[int] = None, 
     timeframe: str = "1d",
     start_time: Optional[str] = None,
-    end_time: Optional[str] = None
+    end_time: Optional[str] = None,
+    full_history: bool = False
 ):
     """Analyze patterns for a specific coin and return pattern data with coordinates for visualization"""
     if not COINGECKO_AVAILABLE:
@@ -222,6 +225,31 @@ async def _analyze_patterns_internal(
             df = coingecko_client.get_ohlc_data(coin_id, vs_currency, days or 365, timeframe)
         else:
             df = coingecko_client.get_ohlc_data(coin_id, vs_currency, days, timeframe)
+
+        # Only use the most recent N candles unless full_history is True
+        if not full_history and df is not None and len(df) > 20:
+            # Run pattern detection on a larger window first (e.g., last 100)
+            temp_df = df.iloc[-100:] if len(df) > 100 else df
+            patterns_result = pattern_detector.analyze_patterns(temp_df)
+            patterns = patterns_result.get('patterns', [])
+            if patterns:
+                # Find the most recent pattern with the largest required window
+                max_window = 0
+                for p in patterns:
+                    duration = 3
+                    if hasattr(pattern_detector, '_get_pattern_duration'):
+                        try:
+                            duration = pattern_detector._get_pattern_duration(p['name'])
+                        except Exception:
+                            duration = 3
+                    idx = p.get('latest_occurrence', 0)
+                    window = idx + duration
+                    if window > max_window:
+                        max_window = window
+                window = min(len(df), max(20, max_window + 2))
+                df = df.iloc[-window:]
+            else:
+                df = df.iloc[-20:]
         
         # Enhanced fallback logic instead of immediate 404
         if df is None or df.empty:
