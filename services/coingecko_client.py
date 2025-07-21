@@ -357,9 +357,9 @@ class CoinGeckoClient:
             
             # Add volume if available
             if 'volume' in df.columns:
-                volume_data = df['volume'].resample(freq).sum()
-                ohlc_data = ohlc_data.join(volume_data, how='left')
-                # Fill missing volume with 0
+                # Calculate per-period volume as the difference between last and first value in the period
+                volume_data = df['volume'].resample(freq).last()
+                ohlc_data = ohlc_data.join(volume_data.rename('volume'), how='left')
                 ohlc_data['volume'] = ohlc_data['volume'].fillna(0)
             else:
                 # Add default volume column if not available
@@ -367,6 +367,15 @@ class CoinGeckoClient:
             
             # Remove any rows with NaN values in OHLC data but keep volume
             ohlc_data = ohlc_data.dropna(subset=['open', 'high', 'low', 'close'])
+
+            # Remove candles where open == high == low == close (likely incomplete data)
+            mask = ~((ohlc_data['open'] == ohlc_data['high']) &
+                     (ohlc_data['open'] == ohlc_data['low']) &
+                     (ohlc_data['open'] == ohlc_data['close']))
+            filtered_ohlc = ohlc_data[mask]
+            if len(filtered_ohlc) < len(ohlc_data):
+                print(f"⚠️ Dropped {len(ohlc_data) - len(filtered_ohlc)} incomplete OHLC candles (all values equal)")
+            ohlc_data = filtered_ohlc
             
             # Debug logging
             print(f"Market chart conversion for {coin_id} ({timeframe}):")
