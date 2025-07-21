@@ -100,9 +100,8 @@ class CoinGeckoClient:
             for col in ['open', 'high', 'low', 'close']:
                 df[col] = pd.to_numeric(df[col])
             
-            # For 1h/4h timeframes, resample daily data if needed
-            if timeframe in ["1h", "4h"] and len(df) > 0:
-                df = self._resample_for_intraday(df, timeframe)
+            # REMOVED SYNTHETIC DATA GENERATION - NO MORE FAKE RESAMPLING FOR INTRADAY
+            print(f"✅ REAL DATA: Returning {len(df)} authentic {timeframe} data points")
             
             return df
             
@@ -115,17 +114,20 @@ class CoinGeckoClient:
             return None
     
     def get_market_chart(self, coin_id: str, vs_currency: str = "usd", days: int = 30) -> Optional[Dict[str, Any]]:
-        """Fetch market chart data including price, market cap, and volume"""
+        """Fetch market chart data including price, market cap, and volume with proper intervals"""
         try:
             url = f"{self.base_url}/coins/{coin_id}/market_chart"
             
-            # Determine appropriate interval based on days
+            # Determine appropriate interval based on days for REAL data
             if days <= 1:
-                interval = "minutely"
+                interval = "minutely"  # For sub-daily requests
+                print(f"📊 INTERVAL: Using minutely data for {days} day(s)")
             elif days <= 90:
-                interval = "hourly"
+                interval = "hourly"    # For 1h-90 day requests - provides real hourly data
+                print(f"📊 INTERVAL: Using hourly data for {days} day(s)")
             else:
-                interval = "daily"
+                interval = "daily"     # For >90 day requests
+                print(f"📊 INTERVAL: Using daily data for {days} day(s)")
             
             params = {
                 "vs_currency": vs_currency,
@@ -285,30 +287,30 @@ class CoinGeckoClient:
     def _get_ohlc_from_market_chart(self, coin_id: str, vs_currency: str = "usd", days: int = 30, timeframe: str = "1d") -> Optional[pd.DataFrame]:
         """Convert market chart data to OHLC format with proper timeframe aggregation"""
         try:
-            # Adjust days and request strategy based on timeframe
+            # Adjust days and request strategy based on timeframe - REAL DATA ONLY
             if timeframe == "1h":
-                # For hourly: use shorter periods to get higher resolution data
+                # For hourly: use shorter periods to get REAL hourly data
                 days = min(days, 7)  # CoinGecko provides hourly data for up to 7 days
-                print(f"Requesting hourly market chart data for {days} days")
+                print(f"🕐 REAL 1H DATA: Requesting hourly market chart data for {days} days")
             elif timeframe == "4h":
-                # For 4h: use moderate periods
+                # For 4h: use moderate periods, aggregate from REAL hourly data
                 days = min(days, 30)  # Use up to 30 days for 4h data
-                print(f"Requesting market chart data for 4h timeframe: {days} days")
+                print(f"🕐 REAL 4H DATA: Requesting hourly data for 4h aggregation: {days} days")
             elif timeframe == "1w":
-                # For weekly: request daily data for a reasonable period, then resample to weekly
+                # For weekly: request daily data, aggregate to weekly
                 days = min(days, 90)
-                print(f"Requesting daily data for weekly resampling: {days} days")
+                print(f"📅 WEEKLY: Requesting daily data for weekly aggregation: {days} days")
             elif timeframe == "1m":
-                # For monthly: request daily data for a reasonable period, then resample to monthly  
+                # For monthly: request daily data, aggregate to monthly
                 days = min(days, 90)
-                print(f"Requesting daily data for monthly resampling: {days} days")
+                print(f"📅 MONTHLY: Requesting daily data for monthly aggregation: {days} days")
             
             # Get market chart data with appropriate timeframe
             market_data = self.get_market_chart(coin_id, vs_currency, days)
             
             if not market_data or 'prices' not in market_data:
-                # Fallback: Generate mock data for weekly/monthly when API fails
-                return self._generate_fallback_ohlc_data(coin_id, timeframe, days)
+                print(f"❌ NO DATA: Market chart failed for {coin_id} {timeframe}")
+                return None  # NO SYNTHETIC FALLBACK DATA
             
             # Convert price data to DataFrame
             prices = market_data['prices']
@@ -340,50 +342,18 @@ class CoinGeckoClient:
             else:
                 freq = "1D"  # Default to daily
             
-            # Resample price data to create OHLC
+            # Resample price data to create AUTHENTIC OHLC (NO SYNTHETIC VARIATIONS)
+            print(f"📊 AUTHENTIC OHLC: Creating {freq} OHLC from real price data")
             ohlc_data = df['price'].resample(freq).ohlc()
             
-            # Fix issue where resampling daily price data results in identical OHLC values
-            # When we have single price points per period, create realistic OHLC variations
-            for idx, row in ohlc_data.iterrows():
-                if row['open'] == row['high'] == row['low'] == row['close']:
-                    # Generate realistic intraday variations
-                    base_price = row['close']
-                    
-                    # Calculate a reasonable daily volatility (0.5% to 3% based on price level)
-                    if base_price > 50000:  # High-value assets like BTC
-                        volatility = np.random.uniform(0.008, 0.025)  # 0.8% to 2.5%
-                    elif base_price > 1000:  # Mid-value assets like ETH
-                        volatility = np.random.uniform(0.012, 0.035)  # 1.2% to 3.5%
-                    else:  # Lower-value assets
-                        volatility = np.random.uniform(0.015, 0.045)  # 1.5% to 4.5%
-                    
-                    # Generate high and low with realistic distribution
-                    price_range = base_price * volatility
-                    high_offset = np.random.uniform(0.3, 1.0) * price_range
-                    low_offset = np.random.uniform(0.3, 1.0) * price_range
-                    
-                    high = base_price + high_offset
-                    low = base_price - low_offset
-                    
-                    # Generate open based on previous close (if available)
-                    if idx > ohlc_data.index[0]:
-                        prev_close = ohlc_data.loc[:idx].iloc[-2]['close'] if len(ohlc_data.loc[:idx]) > 1 else base_price
-                        # Open usually gaps within -2% to +2% of previous close
-                        gap_percent = np.random.uniform(-0.02, 0.02)
-                        open_price = prev_close * (1 + gap_percent)
-                        # Ensure open is within high/low range
-                        open_price = max(low, min(high, open_price))
-                    else:
-                        # First candle: open near the close
-                        open_price = base_price + np.random.uniform(-price_range * 0.3, price_range * 0.3)
-                        open_price = max(low, min(high, open_price))
-                    
-                    # Update the OHLC values
-                    ohlc_data.at[idx, 'open'] = open_price
-                    ohlc_data.at[idx, 'high'] = max(high, open_price, base_price)
-                    ohlc_data.at[idx, 'low'] = min(low, open_price, base_price)
-                    ohlc_data.at[idx, 'close'] = base_price
+            # Remove rows with NaN values that result from sparse data
+            ohlc_data = ohlc_data.dropna()
+            
+            if len(ohlc_data) == 0:
+                print(f"❌ NO OHLC: Insufficient data for {timeframe} aggregation")
+                return None
+            
+            print(f"✅ AUTHENTIC OHLC: Created {len(ohlc_data)} real {timeframe} candles")
             
             # Add volume if available
             if 'volume' in df.columns:

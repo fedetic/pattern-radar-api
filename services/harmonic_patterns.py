@@ -21,55 +21,142 @@ class HarmonicPatternDetector:
         """Main method to detect all harmonic patterns"""
         patterns = []
         
+        print(f"🎵 HARMONIC PATTERNS DEBUG: Starting detection with {len(df)} data points")
+        
         if len(df) < 50:  # Need enough data for harmonic patterns
+            print(f"🎵 HARMONIC PATTERNS: Insufficient data ({len(df)} < 50), skipping detection")
             return patterns
         
         # Find potential pivot points
         pivots = self._find_pivots(df)
+        print(f"🎵 HARMONIC PATTERNS: Found {len(pivots)} pivot points")
         
         if len(pivots) < 5:
+            print(f"🎵 HARMONIC PATTERNS: Insufficient pivots ({len(pivots)} < 5), skipping detection")
             return patterns
         
-        patterns.extend(self._detect_gartley_patterns(df, pivots))
-        patterns.extend(self._detect_butterfly_patterns(df, pivots))
-        patterns.extend(self._detect_bat_patterns(df, pivots))
-        patterns.extend(self._detect_crab_patterns(df, pivots))
-        patterns.extend(self._detect_abcd_patterns(df, pivots))
-        patterns.extend(self._detect_three_drives_patterns(df, pivots))
-        patterns.extend(self._detect_cypher_patterns(df, pivots))
-        patterns.extend(self._detect_shark_patterns(df, pivots))
-        patterns.extend(self._detect_nenstar_patterns(df, pivots))
-        patterns.extend(self._detect_anti_patterns(df, pivots))
-        patterns.extend(self._detect_deep_crab_patterns(df, pivots))
-        patterns.extend(self._detect_perfect_patterns(df, pivots))
+        # Detect each pattern type with individual logging
+        gartley_patterns = self._detect_gartley_patterns(df, pivots)
+        patterns.extend(gartley_patterns)
+        print(f"🎵 GARTLEY: Detected {len(gartley_patterns)} patterns")
+        
+        butterfly_patterns = self._detect_butterfly_patterns(df, pivots)
+        patterns.extend(butterfly_patterns)
+        print(f"🎵 BUTTERFLY: Detected {len(butterfly_patterns)} patterns")
+        
+        bat_patterns = self._detect_bat_patterns(df, pivots)
+        patterns.extend(bat_patterns)
+        print(f"🎵 BAT: Detected {len(bat_patterns)} patterns")
+        
+        crab_patterns = self._detect_crab_patterns(df, pivots)
+        patterns.extend(crab_patterns)
+        print(f"🎵 CRAB: Detected {len(crab_patterns)} patterns")
+        
+        abcd_patterns = self._detect_abcd_patterns(df, pivots)
+        patterns.extend(abcd_patterns)
+        print(f"🎵 ABCD: Detected {len(abcd_patterns)} patterns")
+        
+        three_drives_patterns = self._detect_three_drives_patterns(df, pivots)
+        patterns.extend(three_drives_patterns)
+        print(f"🎵 THREE DRIVES: Detected {len(three_drives_patterns)} patterns")
+        
+        cypher_patterns = self._detect_cypher_patterns(df, pivots)
+        patterns.extend(cypher_patterns)
+        print(f"🎵 CYPHER: Detected {len(cypher_patterns)} patterns")
+        
+        shark_patterns = self._detect_shark_patterns(df, pivots)
+        patterns.extend(shark_patterns)
+        print(f"🎵 SHARK: Detected {len(shark_patterns)} patterns")
+        
+        nenstar_patterns = self._detect_nenstar_patterns(df, pivots)
+        patterns.extend(nenstar_patterns)
+        print(f"🎵 NENSTAR: Detected {len(nenstar_patterns)} patterns")
+        
+        anti_patterns = self._detect_anti_patterns(df, pivots)
+        patterns.extend(anti_patterns)
+        print(f"🎵 ANTI: Detected {len(anti_patterns)} patterns")
+        
+        deep_crab_patterns = self._detect_deep_crab_patterns(df, pivots)
+        patterns.extend(deep_crab_patterns)
+        print(f"🎵 DEEP CRAB: Detected {len(deep_crab_patterns)} patterns")
+        
+        perfect_patterns = self._detect_perfect_patterns(df, pivots)
+        patterns.extend(perfect_patterns)
+        print(f"🎵 PERFECT: Detected {len(perfect_patterns)} patterns")
+        
+        print(f"🎵 HARMONIC PATTERNS TOTAL: Generated {len(patterns)} harmonic patterns")
+        
+        # Remove overlapping patterns (same time range + direction)
+        patterns = self._remove_overlapping_patterns(patterns)
+        print(f"🎵 HARMONIC PATTERNS AFTER OVERLAP REMOVAL: {len(patterns)} patterns remain")
+        
+        # Limit to top 3 highest confidence harmonic patterns
+        if len(patterns) > 3:
+            patterns.sort(key=lambda x: x.get('confidence', 0), reverse=True)
+            patterns = patterns[:3]
+            print(f"🎵 HARMONIC PATTERNS: Limited to top 3 patterns: {[p['name'] for p in patterns]}")
         
         return patterns
     
-    def _find_pivots(self, df: pd.DataFrame, window: int = 5) -> List[Dict[str, Any]]:
-        """Find pivot highs and lows"""
+    def _find_pivots(self, df: pd.DataFrame, window: int = 3) -> List[Dict[str, Any]]:
+        """Find pivot highs and lows with more flexible detection"""
         pivots = []
         
+        print(f"🎵 PIVOT DETECTION: Scanning {len(df)} bars with window={window}")
+        
         for i in range(window, len(df) - window):
-            # Check for pivot high
-            if all(df['high'].iloc[i] >= df['high'].iloc[i-j] for j in range(1, window+1)) and \
-               all(df['high'].iloc[i] >= df['high'].iloc[i+j] for j in range(1, window+1)):
+            # More flexible pivot high detection - allow some tolerance
+            is_pivot_high = True
+            current_high = df['high'].iloc[i]
+            
+            # Check left side
+            for j in range(1, window + 1):
+                if current_high < df['high'].iloc[i-j] * 0.999:  # 0.1% tolerance
+                    is_pivot_high = False
+                    break
+            
+            # Check right side if left side passed
+            if is_pivot_high:
+                for j in range(1, window + 1):
+                    if current_high < df['high'].iloc[i+j] * 0.999:  # 0.1% tolerance
+                        is_pivot_high = False
+                        break
+            
+            if is_pivot_high:
                 pivots.append({
                     'index': i,
-                    'price': df['high'].iloc[i],
+                    'price': current_high,
                     'type': 'high',
                     'timestamp': df.index[i]
                 })
+                continue
+                
+            # More flexible pivot low detection - allow some tolerance
+            is_pivot_low = True
+            current_low = df['low'].iloc[i]
             
-            # Check for pivot low
-            elif all(df['low'].iloc[i] <= df['low'].iloc[i-j] for j in range(1, window+1)) and \
-                 all(df['low'].iloc[i] <= df['low'].iloc[i+j] for j in range(1, window+1)):
+            # Check left side  
+            for j in range(1, window + 1):
+                if current_low > df['low'].iloc[i-j] * 1.001:  # 0.1% tolerance
+                    is_pivot_low = False
+                    break
+            
+            # Check right side if left side passed
+            if is_pivot_low:
+                for j in range(1, window + 1):
+                    if current_low > df['low'].iloc[i+j] * 1.001:  # 0.1% tolerance
+                        is_pivot_low = False
+                        break
+            
+            if is_pivot_low:
                 pivots.append({
                     'index': i,
-                    'price': df['low'].iloc[i],
+                    'price': current_low,
                     'type': 'low',
                     'timestamp': df.index[i]
                 })
         
+        print(f"🎵 PIVOT DETECTION: Found {len(pivots)} pivot points")
         return pivots
     
     def _detect_gartley_patterns(self, df: pd.DataFrame, pivots: List[Dict]) -> List[Dict[str, Any]]:
@@ -513,6 +600,133 @@ class HarmonicPatternDetector:
             })
         
         return levels
+    
+    def _remove_overlapping_patterns(self, patterns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Remove overlapping harmonic patterns and combine their information"""
+        if len(patterns) <= 1:
+            return patterns
+        
+        print(f"🎵 OVERLAP DETECTION: Processing {len(patterns)} patterns for overlap")
+        
+        # Group patterns by overlap
+        groups = []
+        processed = set()
+        
+        for i, pattern1 in enumerate(patterns):
+            if i in processed:
+                continue
+                
+            # Start a new group with this pattern
+            current_group = [pattern1]
+            processed.add(i)
+            
+            # Find all patterns that overlap with pattern1
+            for j, pattern2 in enumerate(patterns[i+1:], i+1):
+                if j in processed:
+                    continue
+                    
+                if self._patterns_overlap(pattern1, pattern2):
+                    current_group.append(pattern2)
+                    processed.add(j)
+                    print(f"🎵 OVERLAP FOUND: {pattern1['name']} overlaps with {pattern2['name']}")
+            
+            groups.append(current_group)
+        
+        # For each group, keep the highest confidence pattern and merge descriptions
+        deduplicated_patterns = []
+        
+        for group in groups:
+            if len(group) == 1:
+                # No overlaps, keep as is
+                deduplicated_patterns.append(group[0])
+            else:
+                # Multiple overlapping patterns - merge them
+                merged_pattern = self._merge_overlapping_patterns(group)
+                deduplicated_patterns.append(merged_pattern)
+                print(f"🎵 MERGED: {len(group)} overlapping patterns into '{merged_pattern['name']}'")
+        
+        print(f"🎵 OVERLAP RESULT: {len(patterns)} → {len(deduplicated_patterns)} patterns after deduplication")
+        return deduplicated_patterns
+    
+    def _patterns_overlap(self, pattern1: Dict[str, Any], pattern2: Dict[str, Any]) -> bool:
+        """Check if two harmonic patterns overlap in time and direction"""
+        # Must have same direction
+        if pattern1.get('direction') != pattern2.get('direction'):
+            return False
+        
+        # Get time ranges
+        coords1 = pattern1.get('coordinates', {})
+        coords2 = pattern2.get('coordinates', {})
+        
+        if not coords1 or not coords2:
+            return False
+        
+        # Get start and end times
+        start1 = coords1.get('start_time')
+        end1 = coords1.get('end_time')
+        start2 = coords2.get('start_time')
+        end2 = coords2.get('end_time')
+        
+        if not all([start1, end1, start2, end2]):
+            return False
+        
+        try:
+            # Convert to timestamps for comparison
+            start1_ts = pd.Timestamp(start1)
+            end1_ts = pd.Timestamp(end1)
+            start2_ts = pd.Timestamp(start2)
+            end2_ts = pd.Timestamp(end2)
+            
+            # Check for time overlap (>50% overlap threshold)
+            overlap_start = max(start1_ts, start2_ts)
+            overlap_end = min(end1_ts, end2_ts)
+            
+            if overlap_start >= overlap_end:
+                return False  # No overlap
+            
+            overlap_duration = overlap_end - overlap_start
+            pattern1_duration = end1_ts - start1_ts
+            pattern2_duration = end2_ts - start2_ts
+            
+            # Calculate overlap percentage for both patterns
+            overlap1_pct = overlap_duration / pattern1_duration if pattern1_duration.total_seconds() > 0 else 0
+            overlap2_pct = overlap_duration / pattern2_duration if pattern2_duration.total_seconds() > 0 else 0
+            
+            # Consider overlapping if either pattern has >50% overlap
+            return overlap1_pct > 0.5 or overlap2_pct > 0.5
+            
+        except Exception as e:
+            print(f"🎵 OVERLAP ERROR: Could not compare times: {e}")
+            return False
+    
+    def _merge_overlapping_patterns(self, overlapping_patterns: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Merge overlapping patterns, keeping the highest confidence one as primary"""
+        # Sort by confidence (highest first)
+        sorted_patterns = sorted(overlapping_patterns, key=lambda x: x.get('confidence', 0), reverse=True)
+        primary_pattern = sorted_patterns[0].copy()
+        other_patterns = sorted_patterns[1:]
+        
+        # Create enhanced name showing additional confirmations
+        other_names = [p['name'].replace(' Pattern', '') for p in other_patterns]
+        if other_names:
+            primary_pattern['name'] = f"{primary_pattern['name']} (+{len(other_names)} others)"
+        
+        # Enhance description with overlap information
+        base_description = primary_pattern.get('description', '')
+        direction = primary_pattern.get('direction', 'neutral')
+        
+        if other_names:
+            confirmation_text = f"Confirmed by {', '.join(other_names)} pattern{'s' if len(other_names) > 1 else ''} in the same timeframe"
+            primary_pattern['description'] = f"{base_description}. {confirmation_text}."
+        
+        # Slightly boost confidence due to multiple confirmations (max +10%)
+        original_confidence = primary_pattern.get('confidence', 0)
+        confidence_boost = min(10, len(other_names) * 3)  # +3% per additional pattern, max +10%
+        primary_pattern['confidence'] = min(100, original_confidence + confidence_boost)
+        
+        print(f"🎵 PATTERN MERGE: '{primary_pattern['name']}' confidence boosted from {original_confidence}% to {primary_pattern['confidence']}%")
+        
+        return primary_pattern
 
 # Global instance
 harmonic_detector = HarmonicPatternDetector()
