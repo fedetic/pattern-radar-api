@@ -26,6 +26,13 @@ except ImportError as e:
     PATTERN_DETECTOR_AVAILABLE = False
     print(f"Warning: Pattern detector not available: {e}")
 
+try:
+    from services.ml_predictor import ml_predictor_service
+    ML_PREDICTOR_AVAILABLE = True
+except ImportError as e:
+    ML_PREDICTOR_AVAILABLE = False
+    print(f"Warning: ML predictor not available: {e}")
+
 app = FastAPI(title="Pattern Hero API", description="Crypto pattern analysis API")
 
 # Allow local frontend to call this backend
@@ -124,13 +131,22 @@ async def get_market_data(
         
         # Convert DataFrame to list of dictionaries
         market_data = []
-        for timestamp, row in df.iterrows():
+        for i, (timestamp, row) in enumerate(df.iterrows()):
+            # Temporary: Add test volume data to verify frontend display
+            test_volume = float(row.get('volume', 0))
+            if test_volume == 0:
+                # Generate test volume proportional to price movement
+                price_range = float(row['high']) - float(row['low'])
+                base_volume = price_range * float(row['close']) * 0.1
+                test_volume = base_volume * (1 + 0.5 * (i % 10) / 10)  # Add variation
+            
             market_data.append({
                 "timestamp": timestamp.isoformat(),
                 "open": float(row['open']),
                 "high": float(row['high']),
                 "low": float(row['low']),
-                "close": float(row['close'])
+                "close": float(row['close']),
+                "volume": test_volume  # Include volume data with test values
             })
         
         return {
@@ -226,30 +242,15 @@ async def _analyze_patterns_internal(
         else:
             df = coingecko_client.get_ohlc_data(coin_id, vs_currency, days, timeframe)
 
-        # Only use the most recent N candles unless full_history is True
-        if not full_history and df is not None and len(df) > 20:
-            # Run pattern detection on a larger window first (e.g., last 100)
-            temp_df = df.iloc[-100:] if len(df) > 100 else df
-            patterns_result = pattern_detector.analyze_patterns(temp_df)
-            patterns = patterns_result.get('patterns', [])
-            if patterns:
-                # Find the most recent pattern with the largest required window
-                max_window = 0
-                for p in patterns:
-                    duration = 3
-                    if hasattr(pattern_detector, '_get_pattern_duration'):
-                        try:
-                            duration = pattern_detector._get_pattern_duration(p['name'])
-                        except Exception:
-                            duration = 3
-                    idx = p.get('latest_occurrence', 0)
-                    window = idx + duration
-                    if window > max_window:
-                        max_window = window
-                window = min(len(df), max(20, max_window + 2))
-                df = df.iloc[-window:]
-            else:
-                df = df.iloc[-20:]
+        # Keep full dataframe for market data, create separate dataframe for pattern analysis
+        full_df = df.copy()  # Keep full data for chart display
+        pattern_analysis_df = df  # Default to full data
+        
+        # Simplified logic: directly control pattern analysis scope based on full_history
+        if not full_history and df is not None and len(df) > 50:
+            # When full_history=False (toggle ON - "recent only"), use a fixed recent window
+            recent_window = 50  # Fixed window for recent analysis
+            pattern_analysis_df = df.iloc[-recent_window:]
         
         # Enhanced fallback logic instead of immediate 404
         if df is None or df.empty:
@@ -306,21 +307,51 @@ async def _analyze_patterns_internal(
         
         print(f"Got {len(df)} data points")
         
-        # Analyze patterns
+        # Analyze patterns using the appropriate dataframe scope
         try:
-            analysis_result = pattern_detector.analyze_patterns(df)
+            analysis_result = pattern_detector.analyze_patterns(pattern_analysis_df)
             print(f"Analysis completed, found {len(analysis_result.get('patterns', []))} patterns")
-        except Exception as pattern_error:
-            print(f"Pattern analysis failed: {pattern_error}")
-            # Convert DataFrame to market data format for fallback
+            
+            # Override market_data in analysis_result with full dataframe data
             market_data = []
-            for timestamp, row in df.iterrows():
+            for i, (timestamp, row) in enumerate(full_df.iterrows()):
+                # Temporary: Add test volume data to verify frontend display
+                test_volume = float(row.get('volume', 0))
+                if test_volume == 0:
+                    # Generate test volume proportional to price movement
+                    price_range = float(row['high']) - float(row['low'])
+                    base_volume = price_range * float(row['close']) * 0.1
+                    test_volume = base_volume * (1 + 0.5 * (i % 10) / 10)  # Add variation
+                
                 market_data.append({
                     "timestamp": timestamp.isoformat(),
                     "open": float(row['open']),
                     "high": float(row['high']),
                     "low": float(row['low']),
-                    "close": float(row['close'])
+                    "close": float(row['close']),
+                    "volume": test_volume  # Include volume data with test values
+                })
+            analysis_result['market_data'] = market_data
+        except Exception as pattern_error:
+            print(f"Pattern analysis failed: {pattern_error}")
+            # Convert full DataFrame to market data format for fallback
+            market_data = []
+            for i, (timestamp, row) in enumerate(full_df.iterrows()):
+                # Temporary: Add test volume data to verify frontend display
+                test_volume = float(row.get('volume', 0))
+                if test_volume == 0:
+                    # Generate test volume proportional to price movement
+                    price_range = float(row['high']) - float(row['low'])
+                    base_volume = price_range * float(row['close']) * 0.1
+                    test_volume = base_volume * (1 + 0.5 * (i % 10) / 10)  # Add variation
+                
+                market_data.append({
+                    "timestamp": timestamp.isoformat(),
+                    "open": float(row['open']),
+                    "high": float(row['high']),
+                    "low": float(row['low']),
+                    "close": float(row['close']),
+                    "volume": test_volume  # Include volume data with test values
                 })
             
             # Return fallback response with demo patterns but real market data
@@ -391,7 +422,7 @@ async def _analyze_patterns_internal(
             "coin_id": coin_id,
             "vs_currency": vs_currency,
             "timeframe": timeframe,
-            "analysis_date": df.index[-1].isoformat(),
+            "analysis_date": full_df.index[-1].isoformat(),
             "market_info": coin_market_data,
             **analysis_result
         }
@@ -403,6 +434,97 @@ async def _analyze_patterns_internal(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error analyzing patterns: {str(e)}")
+
+@app.get("/predictions/{coin_id}")
+async def get_ml_predictions(
+    coin_id: str,
+    vs_currency: str = "usd",
+    days: int = Query(30, ge=7, le=365, description="Number of days for analysis")
+):
+    """Get ML-based predictions for a specific coin"""
+    
+    try:
+        # Get coin_id from symbol if needed
+        if COINGECKO_AVAILABLE and coin_id.upper() in ["BTC", "ETH", "ADA", "SOL"]:
+            actual_coin_id = coingecko_client.get_coin_by_symbol(coin_id)
+            if actual_coin_id:
+                coin_id = actual_coin_id
+        
+        # Fetch market data
+        df = None
+        if COINGECKO_AVAILABLE:
+            df = coingecko_client.get_ohlc_data(coin_id, vs_currency, days, "1d")
+        
+        if df is None or df.empty:
+            raise HTTPException(status_code=404, detail=f"No market data found for {coin_id}")
+        
+        # Get ML prediction
+        prediction = ml_predictor_service.get_prediction(coin_id, df)
+        
+        if prediction is None:
+            raise HTTPException(
+                status_code=503, 
+                detail=f"ML models not available for {coin_id}. Please train models first using pattern-data-ingest."
+            )
+        
+        return prediction
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in predictions endpoint: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting predictions: {str(e)}")
+
+@app.get("/recommendations/{coin_id}")
+async def get_trading_recommendations(
+    coin_id: str,
+    vs_currency: str = "usd",
+    days: int = Query(30, ge=7, le=365, description="Number of days for analysis"),
+    include_patterns: bool = Query(True, description="Include pattern analysis in recommendation")
+):
+    """Get trading recommendations based on ML predictions and pattern analysis"""
+    
+    try:
+        # Get coin_id from symbol if needed
+        if COINGECKO_AVAILABLE and coin_id.upper() in ["BTC", "ETH", "ADA", "SOL"]:
+            actual_coin_id = coingecko_client.get_coin_by_symbol(coin_id)
+            if actual_coin_id:
+                coin_id = actual_coin_id
+        
+        # Fetch market data
+        df = None
+        if COINGECKO_AVAILABLE:
+            df = coingecko_client.get_ohlc_data(coin_id, vs_currency, days, "1d")
+        
+        if df is None or df.empty:
+            raise HTTPException(status_code=404, detail=f"No market data found for {coin_id}")
+        
+        # Get pattern strength if requested
+        pattern_strength = 0
+        if include_patterns and PATTERN_DETECTOR_AVAILABLE:
+            try:
+                pattern_analysis = pattern_detector.analyze_patterns(df)
+                if pattern_analysis.get('strongest_pattern'):
+                    pattern_strength = pattern_analysis['strongest_pattern'].get('confidence', 0)
+            except Exception as e:
+                print(f"Error getting pattern strength: {e}")
+        
+        # Get recommendation
+        recommendation = ml_predictor_service.get_recommendation(coin_id, df, pattern_strength)
+        
+        if recommendation is None:
+            raise HTTPException(
+                status_code=503, 
+                detail=f"ML models not available for {coin_id}. Please train models first using pattern-data-ingest."
+            )
+        
+        return recommendation
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in recommendations endpoint: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting recommendations: {str(e)}")
 
 @app.get("/")
 async def root():

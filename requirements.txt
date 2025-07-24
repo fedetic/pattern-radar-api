@@ -5,3 +5,7 @@ ta-lib @ https://github.com/cgohlke/talib-build/releases/download/v0.6.4/ta_lib-
 requests
 python-dotenv
 numpy
+xgboost
+scikit-learn
+sqlalchemy
+psycopg2-binary
