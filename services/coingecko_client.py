@@ -54,11 +54,17 @@ class CoinGeckoClient:
             return []
     
     def get_ohlc_data(self, coin_id: str, vs_currency: str = "usd", days: int = 30, timeframe: str = "1d") -> Optional[pd.DataFrame]:
-        """Fetch OHLC data for a specific coin with robust timeframe support and fallbacks"""
+        """Fetch OHLC data for a specific coin with robust timeframe support and fallbacks
+        
+        Note: Currently only '1d' timeframe is exposed in the API, but this method
+        supports multiple timeframes and can be easily re-enabled when needed.
+        """
         print(f"Fetching OHLC data for {coin_id}: {days} days, {timeframe} timeframe")
         
-        # For all timeframes except daily, prefer market_chart for better reliability
-        if timeframe in ["1h", "4h", "1w", "1m"] or days > 90:
+        # For daily timeframe, prefer market_chart with proper daily resampling
+        # because OHLC endpoint returns 4-hour intervals, not true daily candles
+        # For other timeframes, use market_chart for better reliability
+        if timeframe in ["1h", "4h", "1w", "1m", "1d"]:
             print(f"Using market_chart endpoint for {timeframe} timeframe")
             result = self._get_ohlc_from_market_chart(coin_id, vs_currency, days, timeframe)
             if result is not None:
@@ -83,8 +89,8 @@ class CoinGeckoClient:
             
             if not ohlc_data:
                 print(f"OHLC endpoint returned empty data for {coin_id}")
-                # If OHLC fails, try market_chart as final fallback
-                if timeframe not in ["1h", "4h", "1w", "1m"]:  # Avoid infinite recursion
+                # If OHLC fails, try market_chart as final fallback (for non-daily timeframes)
+                if timeframe not in ["1h", "4h", "1w", "1m", "1d"]:
                     print("Trying market_chart as final fallback")
                     return self._get_ohlc_from_market_chart(coin_id, vs_currency, days, timeframe)
                 return None
@@ -101,14 +107,14 @@ class CoinGeckoClient:
                 df[col] = pd.to_numeric(df[col])
             
             # REMOVED SYNTHETIC DATA GENERATION - NO MORE FAKE RESAMPLING FOR INTRADAY
-            print(f"✅ REAL DATA: Returning {len(df)} authentic {timeframe} data points")
+            print(f"REAL DATA: Returning {len(df)} authentic {timeframe} data points")
             
             return df
             
         except requests.RequestException as e:
             print(f"Error fetching OHLC data for {coin_id}: {e}")
-            # Final fallback: try market_chart if we haven't already
-            if timeframe not in ["1h", "4h", "1w", "1m"]:
+            # Final fallback: try market_chart if we haven't already (for non-daily timeframes)
+            if timeframe not in ["1h", "4h", "1w", "1m", "1d"]:
                 print("Trying market_chart as error fallback")
                 return self._get_ohlc_from_market_chart(coin_id, vs_currency, days, timeframe)
             return None
@@ -130,7 +136,7 @@ class CoinGeckoClient:
                 # No interval parameter - let CoinGecko determine automatically
             }
             
-            print(f"📊 AUTO-INTERVAL: CoinGecko will determine granularity for {days} day(s)")
+            print(f"AUTO-INTERVAL: CoinGecko will determine granularity for {days} day(s)")
             if days <= 1:
                 print(f"  Expected: 5-minute intervals")
             elif days <= 90:
@@ -294,25 +300,25 @@ class CoinGeckoClient:
             if timeframe == "1h":
                 # For hourly: use shorter periods to get REAL hourly data
                 days = min(days, 7)  # CoinGecko provides hourly data for up to 7 days
-                print(f"🕐 REAL 1H DATA: Requesting hourly market chart data for {days} days")
+                print(f"REAL 1H DATA: Requesting hourly market chart data for {days} days")
             elif timeframe == "4h":
                 # For 4h: use moderate periods, aggregate from REAL hourly data
                 days = min(days, 30)  # Use up to 30 days for 4h data
-                print(f"🕐 REAL 4H DATA: Requesting hourly data for 4h aggregation: {days} days")
+                print(f"REAL 4H DATA: Requesting hourly data for 4h aggregation: {days} days")
             elif timeframe == "1w":
                 # For weekly: request daily data, aggregate to weekly
                 days = min(days, 90)
-                print(f"📅 WEEKLY: Requesting daily data for weekly aggregation: {days} days")
+                print(f"WEEKLY: Requesting daily data for weekly aggregation: {days} days")
             elif timeframe == "1m":
                 # For monthly: request daily data, aggregate to monthly
                 days = min(days, 90)
-                print(f"📅 MONTHLY: Requesting daily data for monthly aggregation: {days} days")
+                print(f"MONTHLY: Requesting daily data for monthly aggregation: {days} days")
             
             # Get market chart data with appropriate timeframe
             market_data = self.get_market_chart(coin_id, vs_currency, days)
             
             if not market_data or 'prices' not in market_data:
-                print(f"❌ NO DATA: Market chart failed for {coin_id} {timeframe}")
+                print(f"NO DATA: Market chart failed for {coin_id} {timeframe}")
                 return None  # NO SYNTHETIC FALLBACK DATA
             
             # Convert price data to DataFrame
@@ -346,27 +352,42 @@ class CoinGeckoClient:
                 freq = "1D"  # Default to daily
             
             # Resample price data to create AUTHENTIC OHLC (NO SYNTHETIC VARIATIONS)
-            print(f"📊 AUTHENTIC OHLC: Creating {freq} OHLC from real price data")
-            ohlc_data = df['price'].resample(freq).ohlc()
+            print(f"AUTHENTIC OHLC: Creating {freq} OHLC from real price data")
+            print(f"Input data frequency: {len(df)} data points over {(df.index[-1] - df.index[0]).days} days")
+            
+            # For daily resampling, ensure we align to daily boundaries
+            if timeframe == "1d":
+                # Use business day frequency to ensure proper daily alignment
+                ohlc_data = df['price'].resample('D').ohlc()
+                print(f"Daily resampling: {len(df)} raw points -> {len(ohlc_data)} daily candles")
+            else:
+                ohlc_data = df['price'].resample(freq).ohlc()
             
             # Remove rows with NaN values that result from sparse data
             ohlc_data = ohlc_data.dropna()
             
             if len(ohlc_data) == 0:
-                print(f"❌ NO OHLC: Insufficient data for {timeframe} aggregation")
+                print(f"NO OHLC: Insufficient data for {timeframe} aggregation")
                 return None
             
-            print(f"✅ AUTHENTIC OHLC: Created {len(ohlc_data)} real {timeframe} candles")
+            print(f"AUTHENTIC OHLC: Created {len(ohlc_data)} real {timeframe} candles")
             
             # Add volume if available
             if 'volume' in df.columns:
                 # Calculate proper volume for each period
                 # For cumulative volume data, take the sum of changes within each period
-                volume_data = df['volume'].resample(freq).agg(lambda x: max(x) - min(x) if len(x) > 1 else x.iloc[-1] if len(x) == 1 else 0)
+                if timeframe == "1d":
+                    # For daily data, use daily resampling to match OHLC
+                    volume_data = df['volume'].resample('D').agg(lambda x: max(x) - min(x) if len(x) > 1 else x.iloc[-1] if len(x) == 1 else 0)
+                else:
+                    volume_data = df['volume'].resample(freq).agg(lambda x: max(x) - min(x) if len(x) > 1 else x.iloc[-1] if len(x) == 1 else 0)
                 
                 # If volume is still all zeros or negative, use the mean as fallback
                 if (volume_data <= 0).all():
-                    volume_data = df['volume'].resample(freq).mean()
+                    if timeframe == "1d":
+                        volume_data = df['volume'].resample('D').mean()
+                    else:
+                        volume_data = df['volume'].resample(freq).mean()
                 
                 # If still zero, generate realistic volume based on price movement
                 if (volume_data <= 0).all():

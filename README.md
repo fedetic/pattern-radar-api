@@ -4,7 +4,7 @@ A FastAPI-based backend for crypto pattern analysis with real-time market data i
 
 ## Overview
 
-The Pattern Hero backend is a Python FastAPI application that provides pattern analysis endpoints for cryptocurrency trading pairs. It integrates with CoinGecko API for market data and uses technical analysis libraries for pattern detection.
+The Pattern Hero backend is a Python FastAPI application using a postgres DB (patternapp schema) that provides pattern analysis endpoints for cryptocurrency trading pairs. It integrates with CoinGecko API for market data and uses technical analysis libraries for pattern detection.
 
 ## Features
 

@@ -1,9 +1,4 @@
-from fastapi import FastAPI, Query, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional
-import os
-
-# Try to load optional dependencies
+# Load environment variables first (critical for database connection)
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -12,19 +7,62 @@ except ImportError:
     DOTENV_AVAILABLE = False
     print("Warning: python-dotenv not available")
 
+from fastapi import FastAPI, Query, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from typing import Optional
+import os
+
+# Enhanced services with database persistence
 try:
-    from services.coingecko_client import coingecko_client
+    from services.enhanced_coingecko_client import enhanced_coingecko_client
+    from services.coingecko_client import coingecko_client  # Fallback
     COINGECKO_AVAILABLE = True
+    DATABASE_ENHANCED = True
 except ImportError as e:
-    COINGECKO_AVAILABLE = False
-    print(f"Warning: CoinGecko client not available: {e}")
+    try:
+        from services.coingecko_client import coingecko_client
+        COINGECKO_AVAILABLE = True
+        DATABASE_ENHANCED = False
+        print(f"Warning: Enhanced CoinGecko client not available, using basic version: {e}")
+    except ImportError as e2:
+        COINGECKO_AVAILABLE = False
+        DATABASE_ENHANCED = False
+        print(f"Warning: CoinGecko client not available: {e2}")
 
 try:
-    from services.pattern_detector import pattern_detector
+    from services.enhanced_pattern_detector import enhanced_pattern_detector
+    from services.pattern_detector import pattern_detector  # Fallback
     PATTERN_DETECTOR_AVAILABLE = True
+    ENHANCED_PATTERN_DETECTOR_AVAILABLE = True
 except ImportError as e:
-    PATTERN_DETECTOR_AVAILABLE = False
-    print(f"Warning: Pattern detector not available: {e}")
+    try:
+        from services.pattern_detector import pattern_detector
+        PATTERN_DETECTOR_AVAILABLE = True
+        ENHANCED_PATTERN_DETECTOR_AVAILABLE = False
+        print(f"Warning: Enhanced pattern detector not available, using basic version: {e}")
+    except ImportError as e2:
+        PATTERN_DETECTOR_AVAILABLE = False
+        ENHANCED_PATTERN_DETECTOR_AVAILABLE = False
+        print(f"Warning: Pattern detector not available: {e2}")
+
+# Database initialization (only if enhanced services haven't already initialized it)
+if not DATABASE_ENHANCED:
+    try:
+        from database.connection import init_database
+        DATABASE_AVAILABLE = True
+        print("Initializing database connection...")
+        init_database()
+        print("Database initialized successfully")
+    except ImportError as e:
+        DATABASE_AVAILABLE = False
+        print(f"Warning: Database not available: {e}")
+    except Exception as e:
+        DATABASE_AVAILABLE = False
+        print(f"Warning: Database initialization failed: {e}")
+else:
+    # Enhanced services are available, so database should already be initialized
+    DATABASE_AVAILABLE = True
+    print("Database already initialized by enhanced services")
 
 try:
     from services.ml_predictor import ml_predictor_service
@@ -44,8 +82,8 @@ app.add_middleware(
 )
 
 @app.get("/pairs")
-async def get_pairs():
-    """Get available crypto trading pairs from CoinGecko"""
+async def get_pairs(force_refresh: bool = Query(False, description="Force refresh from API")):
+    """Get available crypto trading pairs with database caching"""
     if not COINGECKO_AVAILABLE:
         # Return fallback data when dependencies are missing
         return [
@@ -79,7 +117,13 @@ async def get_pairs():
         ]
     
     try:
-        pairs = coingecko_client.get_coins_markets(vs_currency="usd", limit=50)
+        # Use enhanced client with database persistence if available
+        if DATABASE_ENHANCED and DATABASE_AVAILABLE:
+            pairs = enhanced_coingecko_client.get_coins_markets_with_persistence(
+                vs_currency="usd", limit=50, force_refresh=force_refresh
+            )
+        else:
+            pairs = coingecko_client.get_coins_markets(vs_currency="usd", limit=50)
         
         if not pairs:
             # Fallback to mock data if API fails
@@ -114,17 +158,36 @@ async def get_market_data(
     coin_id: str,
     vs_currency: str = "usd",
     days: int = Query(30, ge=1, le=365, description="Number of days of data"),
-    timeframe: Optional[str] = Query("1d", description="Data timeframe")
+    timeframe: Optional[str] = Query("1d", description="Data timeframe (currently only '1d' supported)"),
+    force_refresh: bool = Query(False, description="Force refresh from API")
 ):
     """Get OHLCV market data for a specific coin"""
+    
+    # Validate timeframe - currently only support 1d
+    supported_timeframes = ["1d"]  # Easily extendible list
+    if timeframe not in supported_timeframes:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Timeframe '{timeframe}' not supported. Currently supported: {supported_timeframes}"
+        )
+    
     try:
         # First try to get coin_id from symbol if needed
         if coin_id.upper() in ["BTC", "ETH", "ADA", "SOL"]:
-            actual_coin_id = coingecko_client.get_coin_by_symbol(coin_id)
+            if DATABASE_ENHANCED and DATABASE_AVAILABLE:
+                actual_coin_id = enhanced_coingecko_client.get_coin_by_symbol(coin_id)
+            else:
+                actual_coin_id = coingecko_client.get_coin_by_symbol(coin_id)
             if actual_coin_id:
                 coin_id = actual_coin_id
         
-        df = coingecko_client.get_ohlc_data(coin_id, vs_currency, days, timeframe)
+        # Use enhanced client with database persistence if available
+        if DATABASE_ENHANCED and DATABASE_AVAILABLE:
+            df = enhanced_coingecko_client.get_ohlc_data_with_persistence(
+                coin_id, vs_currency, days, timeframe, force_refresh=force_refresh
+            )
+        else:
+            df = coingecko_client.get_ohlc_data(coin_id, vs_currency, days, timeframe)
         
         if df is None or df.empty:
             raise HTTPException(status_code=404, detail=f"No market data found for {coin_id}")
@@ -167,7 +230,7 @@ async def get_patterns(
     coin_id: str,
     vs_currency: str = "usd",
     days: int = Query(30, ge=7, le=365, description="Number of days for analysis"),
-    timeframe: Optional[str] = Query("1d", description="Analysis timeframe"),
+    timeframe: Optional[str] = Query("1d", description="Analysis timeframe (currently only '1d' supported)"),
     full_history: bool = Query(False, description="Show all patterns, not just most recent window")
 ):
     """Analyze patterns for a specific coin and return pattern data with coordinates for visualization"""
@@ -179,7 +242,7 @@ async def get_filtered_patterns(
     start_time: str = Query(..., description="Start time for analysis (ISO format)"),
     end_time: str = Query(..., description="End time for analysis (ISO format)"),
     vs_currency: str = "usd",
-    timeframe: Optional[str] = Query("1d", description="Analysis timeframe"),
+    timeframe: Optional[str] = Query("1d", description="Analysis timeframe (currently only '1d' supported)"),
     full_history: bool = Query(False, description="Show all patterns, not just most recent window")
 ):
     """Analyze patterns for a specific coin within a time range (for zoom updates)"""
@@ -195,6 +258,15 @@ async def _analyze_patterns_internal(
     full_history: bool = False
 ):
     """Analyze patterns for a specific coin and return pattern data with coordinates for visualization"""
+    
+    # Validate timeframe - currently only support 1d
+    # Keep this validation simple to make it easy to extend later
+    supported_timeframes = ["1d"]  # Easily extendible list
+    if timeframe not in supported_timeframes:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Timeframe '{timeframe}' not supported. Currently supported: {supported_timeframes}"
+        )
     if not COINGECKO_AVAILABLE:
         # Return fallback data when dependencies are missing
         return {
@@ -256,13 +328,8 @@ async def _analyze_patterns_internal(
         if df is None or df.empty:
             print(f"Primary data fetch failed for {coin_id} ({timeframe}), trying fallbacks...")
             
-            # Fallback 1: Try with different timeframe (daily data is more reliable)
-            if timeframe in ["1h", "4h"]:
-                print(f"Trying daily data fallback for {timeframe}")
-                fallback_df = coingecko_client.get_ohlc_data(coin_id, vs_currency, min(days, 30), "1d")
-                if fallback_df is not None and not fallback_df.empty:
-                    print(f"Got daily fallback data, will resample to {timeframe}")
-                    df = coingecko_client._resample_for_intraday(fallback_df, timeframe)
+            # Since we only support 1d now, no timeframe fallback needed
+            # This block is kept for future extensibility when other timeframes are re-added
             
             # Fallback 2: Try different days parameter
             if df is None or df.empty:
@@ -307,9 +374,14 @@ async def _analyze_patterns_internal(
         
         print(f"Got {len(df)} data points")
         
-        # Analyze patterns using the appropriate dataframe scope
+        # Analyze patterns using the appropriate dataframe scope with database persistence
         try:
-            analysis_result = pattern_detector.analyze_patterns(pattern_analysis_df)
+            if ENHANCED_PATTERN_DETECTOR_AVAILABLE and DATABASE_AVAILABLE:
+                analysis_result = enhanced_pattern_detector.analyze_patterns_with_persistence(
+                    pattern_analysis_df, coin_id, timeframe, save_to_db=True
+                )
+            else:
+                analysis_result = pattern_detector.analyze_patterns(pattern_analysis_df)
             print(f"Analysis completed, found {len(analysis_result.get('patterns', []))} patterns")
             
             # Override market_data in analysis_result with full dataframe data
@@ -374,7 +446,10 @@ async def _analyze_patterns_internal(
         
         # Get additional market data
         try:
-            markets_data = coingecko_client.get_coins_markets(vs_currency="usd", limit=100)
+            if DATABASE_ENHANCED and DATABASE_AVAILABLE:
+                markets_data = enhanced_coingecko_client.get_coins_markets_with_persistence(vs_currency="usd", limit=100)
+            else:
+                markets_data = coingecko_client.get_coins_markets(vs_currency="usd", limit=100)
             coin_market_data = next((coin for coin in markets_data if coin['coin_id'] == coin_id), None)
         except Exception as e:
             print(f"Failed to get market data: {e}")
@@ -503,7 +578,12 @@ async def get_trading_recommendations(
         pattern_strength = 0
         if include_patterns and PATTERN_DETECTOR_AVAILABLE:
             try:
-                pattern_analysis = pattern_detector.analyze_patterns(df)
+                if ENHANCED_PATTERN_DETECTOR_AVAILABLE and DATABASE_AVAILABLE:
+                    pattern_analysis = enhanced_pattern_detector.analyze_patterns_with_persistence(
+                        df, coin_id, "1d", save_to_db=True
+                    )
+                else:
+                    pattern_analysis = pattern_detector.analyze_patterns(df)
                 if pattern_analysis.get('strongest_pattern'):
                     pattern_strength = pattern_analysis['strongest_pattern'].get('confidence', 0)
             except Exception as e:
@@ -529,4 +609,143 @@ async def get_trading_recommendations(
 @app.get("/")
 async def root():
     """API health check"""
-    return {"message": "Pattern Hero API is running", "status": "healthy"}
+    status_info = {
+        "message": "Pattern Hero API is running", 
+        "status": "healthy",
+        "features": {
+            "coingecko_available": COINGECKO_AVAILABLE,
+            "pattern_detector_available": PATTERN_DETECTOR_AVAILABLE,
+            "ml_predictor_available": ML_PREDICTOR_AVAILABLE,
+            "database_available": DATABASE_AVAILABLE,
+            "database_enhanced": DATABASE_ENHANCED,
+            "enhanced_pattern_detector": ENHANCED_PATTERN_DETECTOR_AVAILABLE
+        }
+    }
+    return status_info
+
+# Database-specific endpoints
+@app.get("/db/stats")
+async def get_database_stats():
+    """Get database statistics"""
+    if not DATABASE_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Database not available")
+    
+    try:
+        if DATABASE_ENHANCED:
+            stats = enhanced_coingecko_client.get_database_stats()
+            pattern_stats = enhanced_pattern_detector.get_database_pattern_summary()
+            stats.update(pattern_stats)
+            return stats
+        else:
+            return {"error": "Enhanced database features not available"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting database stats: {str(e)}")
+
+@app.get("/db/pattern-statistics")
+async def get_pattern_statistics(days: int = Query(30, ge=1, le=365, description="Days to analyze")):
+    """Get pattern detection statistics"""
+    if not DATABASE_AVAILABLE or not ENHANCED_PATTERN_DETECTOR_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Enhanced pattern detection not available")
+    
+    try:
+        stats = enhanced_pattern_detector.get_pattern_statistics(days)
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting pattern statistics: {str(e)}")
+
+@app.get("/db/high-confidence-patterns")
+async def get_high_confidence_patterns(
+    min_confidence: int = Query(80, ge=50, le=100, description="Minimum confidence level"),
+    days: int = Query(7, ge=1, le=90, description="Days to look back")
+):
+    """Get high confidence patterns from database"""
+    if not DATABASE_AVAILABLE or not ENHANCED_PATTERN_DETECTOR_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Enhanced pattern detection not available")
+    
+    try:
+        patterns = enhanced_pattern_detector.get_high_confidence_patterns(min_confidence, days)
+        return {
+            "patterns": patterns,
+            "total_count": len(patterns),
+            "min_confidence": min_confidence,
+            "days_analyzed": days
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting high confidence patterns: {str(e)}")
+
+@app.get("/db/patterns/by-direction/{direction}")
+async def get_patterns_by_direction(
+    direction: str,
+    days: int = Query(7, ge=1, le=90, description="Days to look back")
+):
+    """Get patterns by direction (bullish, bearish, neutral)"""
+    if not DATABASE_AVAILABLE or not ENHANCED_PATTERN_DETECTOR_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Enhanced pattern detection not available")
+    
+    if direction not in ["bullish", "bearish", "neutral", "continuation"]:
+        raise HTTPException(status_code=400, detail="Direction must be one of: bullish, bearish, neutral, continuation")
+    
+    try:
+        patterns = enhanced_pattern_detector.get_patterns_by_direction(direction, days)
+        return {
+            "direction": direction,
+            "patterns": patterns,
+            "total_count": len(patterns),
+            "days_analyzed": days
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting patterns by direction: {str(e)}")
+
+@app.post("/db/sync-pairs")
+async def sync_trading_pairs(limit: int = Query(100, ge=10, le=500, description="Number of pairs to sync")):
+    """Synchronize trading pairs with CoinGecko API"""
+    if not DATABASE_AVAILABLE or not DATABASE_ENHANCED:
+        raise HTTPException(status_code=503, detail="Enhanced database features not available")
+    
+    try:
+        updated_count = enhanced_coingecko_client.sync_trading_pairs(limit)
+        return {
+            "message": f"Synchronized {updated_count} trading pairs",
+            "updated_count": updated_count,
+            "limit": limit
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error syncing trading pairs: {str(e)}")
+
+@app.post("/db/backfill-ohlcv/{coin_id}")
+async def backfill_ohlcv_data(
+    coin_id: str,
+    days: int = Query(90, ge=1, le=365, description="Days to backfill"),
+    timeframe: str = Query("1d", description="Timeframe to backfill")
+):
+    """Backfill missing OHLCV data for a coin"""
+    if not DATABASE_AVAILABLE or not DATABASE_ENHANCED:
+        raise HTTPException(status_code=503, detail="Enhanced database features not available")
+    
+    try:
+        filled_count = enhanced_coingecko_client.backfill_ohlcv_data(coin_id, timeframe, days)
+        return {
+            "message": f"Backfilled {filled_count} records for {coin_id}",
+            "coin_id": coin_id,
+            "filled_count": filled_count,
+            "days": days,
+            "timeframe": timeframe
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error backfilling OHLCV data: {str(e)}")
+
+@app.delete("/db/cleanup-old-patterns")
+async def cleanup_old_patterns(days_to_keep: int = Query(90, ge=30, le=365, description="Days of patterns to keep")):
+    """Clean up old detected patterns"""
+    if not DATABASE_AVAILABLE or not ENHANCED_PATTERN_DETECTOR_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Enhanced pattern detection not available")
+    
+    try:
+        deleted_count = enhanced_pattern_detector.cleanup_old_patterns(days_to_keep)
+        return {
+            "message": f"Cleaned up {deleted_count} old patterns",
+            "deleted_count": deleted_count,
+            "days_kept": days_to_keep
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error cleaning up old patterns: {str(e)}")
